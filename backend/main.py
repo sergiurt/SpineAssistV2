@@ -135,6 +135,11 @@ def parse_dicom_series(file_bytes: bytes, filename: str, work_dir: str):
     os.makedirs(extract_path, exist_ok=True)
 
     with zipfile.ZipFile(zip_path, "r") as z:
+        real_extract = os.path.realpath(extract_path)
+        for member in z.infolist():
+            member_path = os.path.realpath(os.path.join(real_extract, member.filename))
+            if not member_path.startswith(real_extract + os.sep):
+                raise ValueError(f"Illegal path in ZIP: {member.filename}")
         z.extractall(extract_path)
     os.remove(zip_path)
 
@@ -144,8 +149,12 @@ def parse_dicom_series(file_bytes: bytes, filename: str, work_dir: str):
 
     series_dict: dict = {}
     for dcm_path in dcm_files:
-        parts = dcm_path.replace("\\", "/").split("/")
-        key = f"{parts[-3]}/{parts[-2]}"
+        rel = os.path.relpath(dcm_path, extract_path).replace("\\", "/")
+        rel_parts = rel.split("/")
+        if len(rel_parts) < 3:
+            raise ValueError(f"Expected study/series/file.dcm structure in ZIP, got: {rel}")
+        study_id, series_id = rel_parts[-3], rel_parts[-2]
+        key = f"{study_id}/{series_id}"
         series_dict.setdefault(key, []).append(dcm_path)
 
     rows = []
@@ -275,7 +284,10 @@ def generate_crops(
 
     delta = 0.1
     crops_info = []
-    for idx in range(len(df_sag)):
+    n = min(len(df_sag), len(preds_sag))
+    if n < len(df_sag):
+        print(f"WARNING: preds_sag has {len(preds_sag)} entries but df_sag has {len(df_sag)}; truncating")
+    for idx in range(n):
         study_series = df_sag["study_series"].iloc[idx]
         imgs = np.load(f"{npy_dir}/{study_series}.npy")
         preds = preds_sag[idx].reshape(-1, 2).copy()
@@ -388,6 +400,7 @@ def format_results(
     def get_pred(key: str) -> np.ndarray:
         if targets and key in targets:
             return final_preds[0, targets.index(key)]
+        print(f"WARNING: key '{key}' not found in targets; defaulting to Normal/Mild")
         return np.array([1.0, 0.0, 0.0])
 
     results = []
