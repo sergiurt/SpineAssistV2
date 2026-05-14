@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+
+# Local env
+.env.local
+.env*.local
+
+# macOS
+.DS_Store
+
+# Data / weights (never commit)
+backend/uploads/
+backend/data_tmp/
+backend/weights/
