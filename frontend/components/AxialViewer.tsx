@@ -18,13 +18,11 @@ interface Props {
 function Dot({
   x,
   y,
-  label,
   color,
   rect,
 }: {
   x: number;
   y: number;
-  label: string;
   color: string;
   rect: { offsetLeft: number; offsetTop: number; renderedWidth: number; renderedHeight: number };
 }) {
@@ -32,16 +30,13 @@ function Dot({
   const py = rect.offsetTop + y * rect.renderedHeight;
   return (
     <div
-      className="absolute flex items-center pointer-events-none"
+      className="absolute pointer-events-none"
       style={{ top: py, left: px, transform: "translate(-50%, -50%)" }}
     >
       <div
         className="w-3 h-3 rounded-full"
         style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }}
       />
-      <span className="ml-1 text-xs font-bold bg-black/70 px-1 py-0.5 rounded text-white whitespace-nowrap">
-        {label}
-      </span>
     </div>
   );
 }
@@ -73,14 +68,12 @@ export function AxialViewer({ axialLevel, leftSeverity, rightSeverity }: Props) 
             <Dot
               x={axialLevel.left.x}
               y={axialLevel.left.y}
-              label="L"
               color={SEVERITY_COLORS[leftSeverity]}
               rect={rect}
             />
             <Dot
               x={axialLevel.right.x}
               y={axialLevel.right.y}
-              label="R"
               color={SEVERITY_COLORS[rightSeverity]}
               rect={rect}
             />
