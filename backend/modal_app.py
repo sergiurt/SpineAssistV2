@@ -88,11 +88,11 @@ class SpineAssistApp:
             if len(content) > 50 * 1024 * 1024:
                 raise HTTPException(400, "File too large. Maximum 50 MB.")
 
-            filename = file.filename
+            filename = os.path.basename(file.filename or "upload.zip")
             queue: asyncio.Queue = asyncio.Queue()
 
             def cb(msg: str):
-                queue.put_nowait(("progress", msg))
+                queue.put_nowait(("progress", {"message": msg}))
 
             async def run_inference():
                 work_dir = tempfile.mkdtemp()
@@ -131,7 +131,7 @@ class SpineAssistApp:
                         "images": images,
                     }))
                 except Exception as e:
-                    await queue.put(("error", str(e)))
+                    await queue.put(("error", {"message": str(e)}))
                 finally:
                     shutil.rmtree(work_dir, ignore_errors=True)
                     await queue.put(None)

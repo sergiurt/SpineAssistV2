@@ -22,8 +22,8 @@ export interface PredictionResult {
   patient_id: string;
   predictions: LevelPrediction[];
   images: {
-    "Sagittal T2"?: string; // base64 data-URI
-    "Sagittal T1"?: string;
-    "Axial T2"?: string;
+    "Sagittal T2"?: string | null; // base64 data-URI
+    "Sagittal T1"?: string | null;
+    "Axial T2"?: string | null;
   };
 }
