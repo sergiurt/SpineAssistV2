@@ -15,26 +15,44 @@ const SEVERITY_ORDER: Record<Severity, number> = {
   "Severe": 2,
 };
 
-function worstSeverity(level: LevelPrediction): Severity {
-  const all: Severity[] = [
-    level.spinal_canal_stenosis.severity,
-    level.neural_foraminal_narrowing.left.severity,
-    level.neural_foraminal_narrowing.right.severity,
-    level.subarticular_stenosis.left.severity,
-    level.subarticular_stenosis.right.severity,
-  ];
-  return all.reduce((worst, s) =>
-    SEVERITY_ORDER[s] > SEVERITY_ORDER[worst] ? s : worst
-  );
+type ColorBy = "scs" | "nfn" | "ss" | "all";
+
+function pickSeverity(level: LevelPrediction, colorBy: ColorBy): Severity {
+  const worst = (severities: Severity[]): Severity =>
+    severities.reduce((w, s) => (SEVERITY_ORDER[s] > SEVERITY_ORDER[w] ? s : w));
+
+  switch (colorBy) {
+    case "scs":
+      return level.spinal_canal_stenosis.severity;
+    case "nfn":
+      return worst([
+        level.neural_foraminal_narrowing.left.severity,
+        level.neural_foraminal_narrowing.right.severity,
+      ]);
+    case "ss":
+      return worst([
+        level.subarticular_stenosis.left.severity,
+        level.subarticular_stenosis.right.severity,
+      ]);
+    default:
+      return worst([
+        level.spinal_canal_stenosis.severity,
+        level.neural_foraminal_narrowing.left.severity,
+        level.neural_foraminal_narrowing.right.severity,
+        level.subarticular_stenosis.left.severity,
+        level.subarticular_stenosis.right.severity,
+      ]);
+  }
 }
 
 interface Props {
   imageSrc: string;
   predictions: LevelPrediction[];
   title: string;
+  colorBy?: ColorBy;
 }
 
-export function MriViewer({ imageSrc, predictions, title }: Props) {
+export function MriViewer({ imageSrc, predictions, title, colorBy = "all" }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const rect = useImageRect(containerRef, naturalSize.width, naturalSize.height);
@@ -60,7 +78,7 @@ export function MriViewer({ imageSrc, predictions, title }: Props) {
           predictions.map((level) => {
             const dotX = rect.offsetLeft + level.coordinates.x * rect.renderedWidth;
             const dotY = rect.offsetTop + level.coordinates.y * rect.renderedHeight;
-            const color = SEVERITY_COLORS[worstSeverity(level)];
+            const color = SEVERITY_COLORS[pickSeverity(level, colorBy)];
             return (
               <div
                 key={level.level}

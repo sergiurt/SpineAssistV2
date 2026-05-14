@@ -189,22 +189,27 @@ export default function AnalyzePage() {
               <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
                 <h3 className="text-slate-300 font-semibold mb-4">MRI Views</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {(["Sagittal T2", "Sagittal T1", "Axial T2"] as const).map(
-                    (view) => {
-                      const src = result.images[view];
-                      if (!src) return null;
-                      return (
-                        <MriViewer
-                          key={view}
-                          imageSrc={src}
-                          predictions={
-                            view.includes("Sagittal") ? result.predictions : []
-                          }
-                          title={view}
-                        />
-                      );
-                    }
-                  )}
+                  {(
+                    [
+                      { view: "Sagittal T2", colorBy: "scs" },
+                      { view: "Sagittal T1", colorBy: "nfn" },
+                      { view: "Axial T2",    colorBy: "ss"  },
+                    ] as const
+                  ).map(({ view, colorBy }) => {
+                    const src = result.images[view];
+                    if (!src) return null;
+                    return (
+                      <MriViewer
+                        key={view}
+                        imageSrc={src}
+                        predictions={
+                          view.includes("Sagittal") ? result.predictions : []
+                        }
+                        title={view}
+                        colorBy={colorBy}
+                      />
+                    );
+                  })}
                 </div>
               </div>
 
