@@ -90,10 +90,9 @@ class SpineAssistApp:
 
             filename = file.filename
             queue: asyncio.Queue = asyncio.Queue()
-            loop = asyncio.get_event_loop()
 
             def cb(msg: str):
-                asyncio.run_coroutine_threadsafe(queue.put(("progress", msg)), loop)
+                queue.put_nowait(("progress", msg))
 
             async def run_inference():
                 work_dir = tempfile.mkdtemp()
