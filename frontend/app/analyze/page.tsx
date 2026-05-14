@@ -41,10 +41,14 @@ export default function AnalyzePage() {
     const formData = new FormData();
     formData.append("file", file);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300_000);
+
     try {
       const res = await fetch(`${BACKEND_URL}/api/predict/stream`, {
         method: "POST",
         body: formData,
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -63,8 +67,9 @@ export default function AnalyzePage() {
         const parts = buffer.split("\n\n");
         buffer = parts.pop() ?? "";
         for (const part of parts) {
-          const eventLine = part.split("\n").find((l) => l.startsWith("event:"));
-          const dataLine = part.split("\n").find((l) => l.startsWith("data:"));
+          const lines = part.split("\n");
+          const eventLine = lines.find((l) => l.startsWith("event:"));
+          const dataLine = lines.find((l) => l.startsWith("data:"));
           if (!eventLine || !dataLine) continue;
           const eventType = eventLine.replace("event:", "").trim();
           const data = JSON.parse(dataLine.replace("data:", "").trim());
@@ -81,6 +86,8 @@ export default function AnalyzePage() {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Unknown error");
       setState("error");
+    } finally {
+      clearTimeout(timeoutId);
     }
   };
 
