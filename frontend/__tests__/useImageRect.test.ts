@@ -1,4 +1,4 @@
-import { renderHook } from "@testing-library/react";
+import { renderHook, act } from "@testing-library/react";
 import { useImageRect } from "@/hooks/useImageRect";
 
 // Mock ResizeObserver (not available in jsdom)
@@ -70,4 +70,24 @@ test("square image in square container fills exactly", () => {
   expect(result.current.renderedHeight).toBe(300);
   expect(result.current.offsetTop).toBe(0);
   expect(result.current.offsetLeft).toBe(0);
+});
+
+test("re-computes when ResizeObserver fires", () => {
+  const bcrFn = jest.fn().mockReturnValue({ width: 200, height: 200 });
+  const ref = { current: { getBoundingClientRect: bcrFn } };
+  const { result } = renderHook(() =>
+    useImageRect(ref as any, 400, 200)
+  );
+  // Initial: wide 2:1 image in 200×200 container → renderedHeight=100
+  expect(result.current.renderedHeight).toBe(100);
+
+  // Simulate container resize to 400×400
+  bcrFn.mockReturnValue({ width: 400, height: 400 });
+  const capturedCallback = (global.ResizeObserver as jest.Mock).mock.calls[0][0];
+  act(() => {
+    capturedCallback([]);
+  });
+  // After resize: 2:1 image in 400×400 → renderedHeight=200, renderedWidth=400
+  expect(result.current.renderedWidth).toBe(400);
+  expect(result.current.renderedHeight).toBe(200);
 });
