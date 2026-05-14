@@ -227,6 +227,24 @@ def parse_dicom_series(file_bytes: bytes, filename: str, work_dir: str):
         else:
             weighting = "Unknown"
 
+        # Z position of middle frame — used to sort axial series by spinal level.
+        # In HFS positioning, higher Z = more superior (toward L1), lower Z = toward S1.
+        z_center = 0.0
+        try:
+            sorted_files = sorted(
+                files,
+                key=lambda p: int(os.path.splitext(os.path.basename(p))[0]),
+            )
+        except ValueError:
+            sorted_files = sorted(files)
+        try:
+            dcm_mid = pydicom.dcmread(
+                sorted_files[len(sorted_files) // 2], stop_before_pixels=True
+            )
+            z_center = float(dcm_mid.ImagePositionPatient[2])
+        except Exception:
+            pass
+
         rows.append({
             "study_id": study_id,
             "series_id": series_id,
@@ -235,6 +253,7 @@ def parse_dicom_series(file_bytes: bytes, filename: str, work_dir: str):
             "weighting": weighting,
             "study_series": f"{study_id}_{series_id}",
             "data_path": extract_path + "/",
+            "z_center": z_center,
         })
 
     df_meta = pd.DataFrame(rows)
@@ -529,18 +548,22 @@ def run_axial_coords_prediction(
     device: str,
 ) -> list:
     """
-    For each disc level, select the corresponding axial frame using the sagittal
-    Y-coordinate prediction, run the axial localisation model, and return per-level
-    images with left/right subarticular zone coordinates.
+    For each disc level, find the corresponding axial series (or frame within a
+    single series) and run the axial localisation model.
 
-    Axial frames are sorted ascending by Z (inferior→superior in HFS positioning).
-    Sagittal Y=0 → top of image (superior) → last axial frame (high index).
-    Sagittal Y=1 → bottom of image (inferior) → first axial frame (low index).
-    Mapping: frame_idx = round((1 - y) * (N - 1))
+    Clinical lumbar MRI typically has 5 separate axial series, each prescribed
+    parallel to one disc. They are sorted by their Z-center (physical position):
+    descending Z = superior → inferior = L1/L2 → L5/S1. Sagittal Y predictions
+    are also ordered L1→L5 (ascending Y = more inferior). Both lists are matched
+    by rank after sorting, then the middle frame of each matched series is used —
+    exactly replicating the training data setup.
 
-    Returns a list of dicts (one per level):
+    Fallback for a single axial series: frame is selected by linearly mapping
+    the sagittal Y prediction to the frame index.
+
+    Returns a list of 5 dicts:
       {"level": "L1-L2", "image": "<data-uri>", "left": {x,y}, "right": {x,y}}
-    or an empty list if axial data or model is unavailable.
+    Empty list if no axial data is available.
     """
     _setup_paths()
 
@@ -548,31 +571,50 @@ def run_axial_coords_prediction(
     if df_ax.empty:
         return []
 
-    ax_npy = f"{npy_dir}/{df_ax.iloc[0]['study_series']}.npy"
-    if not os.path.exists(ax_npy):
-        return []
-
-    ax_imgs = np.load(ax_npy)  # (N, H, W)
-    N = len(ax_imgs)
-    if N == 0:
-        return []
-
-    # Sagittal Y coordinates for each disc level (one prediction per sagittal series,
-    # use the first one; preds_sag shape: (n_series, 10) → reshape to (5, 2))
+    # Sagittal Y for each level (L1→L5, ascending Y = more inferior)
     if preds_sag is not None and len(preds_sag) > 0:
         sag_coords = preds_sag[0].reshape(5, 2)  # (5, 2): (x, y) per level
     else:
         sag_coords = np.array([[0.5, 0.2 + i * 0.12] for i in range(5)])
 
+    # Sort axial series by Z descending: highest Z = most superior = L1 end
+    df_ax_sorted = df_ax.sort_values("z_center", ascending=False).reset_index(drop=True)
+    N_ax = len(df_ax_sorted)
+
+    # Disc levels ranked by sagittal Y ascending: rank 0 = smallest Y = most superior
+    level_rank = np.argsort(sag_coords[:, 1])  # e.g. [0,1,2,3,4] for L1→L5
+
     has_ax_model = "coords_ax" in models
 
-    results = []
-    for i, level in enumerate(LEVELS):
-        y = float(sag_coords[i, 1])
-        frame_idx = int(round((1.0 - y) * (N - 1)))
-        frame_idx = max(0, min(N - 1, frame_idx))
+    results_by_level = {}
+    for rank, level_idx in enumerate(level_rank):
+        level = LEVELS[level_idx]
 
-        frame = ax_imgs[frame_idx]
+        if N_ax == 1:
+            # Single combined axial series: select frame by sagittal Y mapping
+            ax_npy = f"{npy_dir}/{df_ax_sorted.iloc[0]['study_series']}.npy"
+            if not os.path.exists(ax_npy):
+                continue
+            ax_imgs = np.load(ax_npy)
+            N = len(ax_imgs)
+            if N == 0:
+                continue
+            y = float(sag_coords[level_idx, 1])
+            # Y=0 (superior) → high frame index (high Z end); Y=1 → frame 0
+            frame_idx = int(round((1.0 - y) * (N - 1)))
+            frame = ax_imgs[max(0, min(N - 1, frame_idx))]
+        else:
+            # Multiple axial series: map rank proportionally to series index
+            ax_idx = round(rank * (N_ax - 1) / max(1, len(LEVELS) - 1))
+            ax_idx = min(ax_idx, N_ax - 1)
+            ax_npy = f"{npy_dir}/{df_ax_sorted.iloc[ax_idx]['study_series']}.npy"
+            if not os.path.exists(ax_npy):
+                continue
+            ax_imgs = np.load(ax_npy)
+            if len(ax_imgs) == 0:
+                continue
+            frame = ax_imgs[len(ax_imgs) // 2]  # middle frame = disc-level frame
+
         image_b64 = _frame_to_jpeg(frame)
 
         if has_ax_model:
@@ -599,11 +641,11 @@ def run_axial_coords_prediction(
             x_left, y_left = 0.3, 0.5
             x_right, y_right = 0.7, 0.5
 
-        results.append({
+        results_by_level[level] = {
             "level": level.replace("/", "-"),
             "image": image_b64,
             "left": {"x": x_left, "y": y_left},
             "right": {"x": x_right, "y": y_right},
-        })
+        }
 
-    return results
+    return [results_by_level[lvl] for lvl in LEVELS if lvl in results_by_level]
