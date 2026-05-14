@@ -58,6 +58,7 @@ class SpineAssistApp:
             format_results,
             generate_crops,
             parse_dicom_series,
+            run_axial_coords_prediction,
             run_classifiers,
             run_coords_prediction,
             run_level2,
@@ -125,10 +126,16 @@ class SpineAssistApp:
                     predictions = format_results(final_preds, targets, crops_info)
                     images = extract_images(df_meta, npy_dir)
 
+                    cb("Extracting axial frames...")
+                    axial_predictions = run_axial_coords_prediction(
+                        models, df_meta, preds_sag, npy_dir, device
+                    )
+
                     await queue.put(("result", {
                         "patient_id": df_meta["study_id"].iloc[0] if not df_meta.empty else "Unknown",
                         "predictions": predictions,
                         "images": images,
+                        "axial_predictions": axial_predictions,
                     }))
                 except Exception as e:
                     await queue.put(("error", {"message": str(e)}))

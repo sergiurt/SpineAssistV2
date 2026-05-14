@@ -18,6 +18,13 @@ export interface LevelPrediction {
   subarticular_stenosis: BilateralPrediction;
 }
 
+export interface AxialLevelPrediction {
+  level: string; // e.g. "L1-L2"
+  image: string; // base64 data-URI of the axial frame for this level
+  left: { x: number; y: number }; // normalised 0–1 within the axial frame
+  right: { x: number; y: number };
+}
+
 export interface PredictionResult {
   patient_id: string;
   predictions: LevelPrediction[];
@@ -26,4 +33,5 @@ export interface PredictionResult {
     "Sagittal T1"?: string | null;
     "Axial T2"?: string | null;
   };
+  axial_predictions?: AxialLevelPrediction[]; // one frame per disc level
 }

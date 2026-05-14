@@ -1,10 +1,11 @@
 "use client";
 import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
+import { AxialViewer } from "@/components/AxialViewer";
 import { MriViewer } from "@/components/MriViewer";
 import { ProgressLog } from "@/components/ProgressLog";
 import { SeverityTable } from "@/components/SeverityTable";
-import type { PredictionResult } from "@/types/api";
+import type { PredictionResult, Severity } from "@/types/api";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:7860";
@@ -187,13 +188,12 @@ export default function AnalyzePage() {
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
-                <h3 className="text-slate-300 font-semibold mb-4">MRI Views</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <h3 className="text-slate-300 font-semibold mb-4">Sagittal Views</h3>
+                <div className="grid grid-cols-2 gap-4">
                   {(
                     [
                       { view: "Sagittal T2", colorBy: "scs" },
                       { view: "Sagittal T1", colorBy: "nfn" },
-                      { view: "Axial T2",    colorBy: "ss"  },
                     ] as const
                   ).map(({ view, colorBy }) => {
                     const src = result.images[view];
@@ -202,9 +202,7 @@ export default function AnalyzePage() {
                       <MriViewer
                         key={view}
                         imageSrc={src}
-                        predictions={
-                          view.includes("Sagittal") ? result.predictions : []
-                        }
+                        predictions={result.predictions}
                         title={view}
                         colorBy={colorBy}
                       />
@@ -220,6 +218,33 @@ export default function AnalyzePage() {
                 <SeverityTable predictions={result.predictions} />
               </div>
             </div>
+
+            {result.axial_predictions && result.axial_predictions.length > 0 && (
+              <div className="bg-slate-900 rounded-2xl border border-slate-800 p-6">
+                <h3 className="text-slate-300 font-semibold mb-4">
+                  Axial T2 — Subarticular Stenosis per Level
+                </h3>
+                <div className="grid grid-cols-5 gap-3">
+                  {result.axial_predictions.map((axLevel) => {
+                    const pred = result.predictions.find(
+                      (p) => p.level === axLevel.level
+                    );
+                    const leftSev: Severity =
+                      pred?.subarticular_stenosis.left.severity ?? "Normal/Mild";
+                    const rightSev: Severity =
+                      pred?.subarticular_stenosis.right.severity ?? "Normal/Mild";
+                    return (
+                      <AxialViewer
+                        key={axLevel.level}
+                        axialLevel={axLevel}
+                        leftSeverity={leftSev}
+                        rightSeverity={rightSev}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>

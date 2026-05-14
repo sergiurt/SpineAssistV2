@@ -70,8 +70,15 @@ def load_all_models(weights_dir: str) -> dict:
             cfg = Config(json.load(open(folder + "config.json")))
             cfg.local_rank = 0
             m = define_model(
-                cfg.name, num_classes=cfg.num_classes,
-                n_channels=cfg.n_channels, pretrained=False
+                cfg.name,
+                num_classes=cfg.num_classes,
+                num_classes_aux=getattr(cfg, "num_classes_aux", 0),
+                n_channels=cfg.n_channels,
+                pooling=getattr(cfg, "pooling", "avg"),
+                drop_rate=getattr(cfg, "drop_rate", 0.0),
+                drop_path_rate=getattr(cfg, "drop_path_rate", 0.0),
+                reduce_stride=getattr(cfg, "reduce_stride", False),
+                pretrained=False,
             ).to(device).eval()
             m = load_model_weights(m, folder + f"{cfg.name}_1.pt", verbose=0, strict=False)
             models["coords"] = (m, cfg)
@@ -93,10 +100,21 @@ def load_all_models(weights_dir: str) -> dict:
                 cfg = Config(json.load(open(folder + "config.json")))
                 cfg.local_rank = 0
                 m = define_model(
-                    cfg.name, num_classes=cfg.num_classes, head_3d=cfg.head_3d,
-                    n_frames=cfg.n_frames, n_channels=cfg.n_channels, pretrained=False
+                    cfg.name,
+                    num_classes=cfg.num_classes,
+                    num_classes_aux=getattr(cfg, "num_classes_aux", 0),
+                    head_3d=getattr(cfg, "head_3d", ""),
+                    n_frames=getattr(cfg, "n_frames", 1),
+                    n_channels=cfg.n_channels,
+                    pooling=getattr(cfg, "pooling", "avg"),
+                    drop_rate=getattr(cfg, "drop_rate", 0.0),
+                    drop_path_rate=getattr(cfg, "drop_path_rate", 0.0),
+                    reduce_stride=getattr(cfg, "reduce_stride", False),
+                    pretrained=False,
                 ).to(device).eval()
                 m = load_model_weights(m, folder + f"{cfg.name}_1.pt", verbose=0)
+                if mode == "crop_2":
+                    m.delta = 1
                 models[mode] = (m, cfg)
                 print(f"Loaded: {mode}")
             except Exception as e:
@@ -116,6 +134,29 @@ def load_all_models(weights_dir: str) -> dict:
             print("Loaded: lvl2")
         except Exception as e:
             print(f"Error loading lvl2: {e}")
+
+    # Axial coords model
+    folder = f"{weights_dir}/2024-09-02_33/"
+    if os.path.exists(folder + "config.json"):
+        try:
+            cfg = Config(json.load(open(folder + "config.json")))
+            cfg.local_rank = 0
+            m = define_model(
+                cfg.name,
+                num_classes=cfg.num_classes,
+                num_classes_aux=getattr(cfg, "num_classes_aux", 0),
+                n_channels=cfg.n_channels,
+                pooling=getattr(cfg, "pooling", "avg"),
+                drop_rate=getattr(cfg, "drop_rate", 0.0),
+                drop_path_rate=getattr(cfg, "drop_path_rate", 0.0),
+                reduce_stride=getattr(cfg, "reduce_stride", False),
+                pretrained=False,
+            ).to(device).eval()
+            m = load_model_weights(m, folder + f"{cfg.name}_1.pt", verbose=0, strict=False)
+            models["coords_ax"] = (m, cfg)
+            print("Loaded: coords_ax")
+        except Exception as e:
+            print(f"Error loading coords_ax: {e}")
 
     return models
 
@@ -328,8 +369,9 @@ def run_classifiers(models: dict, df_crop, crops_dir: str, device: str) -> dict:
         if mode in ["crop", "crop_2"]:
             df_mode = df_mode[df_mode["orient"] == "Sagittal"].reset_index(drop=True)
         else:
+            # Accept T2 and Unknown-weighted sagittal (DICOM description may not say "t2")
             df_mode = df_mode[
-                (df_mode["orient"] == "Sagittal") & (df_mode["weighting"] == "T2")
+                (df_mode["orient"] == "Sagittal") & (df_mode["weighting"] != "T1")
             ].reset_index(drop=True)
         if df_mode.empty:
             continue
@@ -464,3 +506,104 @@ def extract_images(df_meta, npy_dir: str) -> dict:
                 _, buf = cv2.imencode(".jpg", mid.astype(np.uint8))
                 images[key] = "data:image/jpeg;base64," + base64.b64encode(buf).decode()
     return images
+
+
+def _frame_to_jpeg(frame: np.ndarray) -> str:
+    """Normalise a raw grayscale frame and encode as base64 JPEG data-URI."""
+    f = frame.astype(np.float32)
+    pmin, pmax = np.percentile(f, (1, 99))
+    if pmax > pmin:
+        f = np.clip(f, pmin, pmax)
+        f = (f - pmin) / (pmax - pmin) * 255
+    else:
+        f = (f - f.min()) / (f.max() - f.min() + 1e-6) * 255
+    _, buf = cv2.imencode(".jpg", f.astype(np.uint8))
+    return "data:image/jpeg;base64," + base64.b64encode(buf).decode()
+
+
+def run_axial_coords_prediction(
+    models: dict,
+    df_meta,
+    preds_sag: np.ndarray,
+    npy_dir: str,
+    device: str,
+) -> list:
+    """
+    For each disc level, select the corresponding axial frame using the sagittal
+    Y-coordinate prediction, run the axial localisation model, and return per-level
+    images with left/right subarticular zone coordinates.
+
+    Axial frames are sorted ascending by Z (inferior→superior in HFS positioning).
+    Sagittal Y=0 → top of image (superior) → last axial frame (high index).
+    Sagittal Y=1 → bottom of image (inferior) → first axial frame (low index).
+    Mapping: frame_idx = round((1 - y) * (N - 1))
+
+    Returns a list of dicts (one per level):
+      {"level": "L1-L2", "image": "<data-uri>", "left": {x,y}, "right": {x,y}}
+    or an empty list if axial data or model is unavailable.
+    """
+    _setup_paths()
+
+    df_ax = df_meta[df_meta["orient"] == "Axial"].copy().reset_index(drop=True)
+    if df_ax.empty:
+        return []
+
+    ax_npy = f"{npy_dir}/{df_ax.iloc[0]['study_series']}.npy"
+    if not os.path.exists(ax_npy):
+        return []
+
+    ax_imgs = np.load(ax_npy)  # (N, H, W)
+    N = len(ax_imgs)
+    if N == 0:
+        return []
+
+    # Sagittal Y coordinates for each disc level (one prediction per sagittal series,
+    # use the first one; preds_sag shape: (n_series, 10) → reshape to (5, 2))
+    if preds_sag is not None and len(preds_sag) > 0:
+        sag_coords = preds_sag[0].reshape(5, 2)  # (5, 2): (x, y) per level
+    else:
+        sag_coords = np.array([[0.5, 0.2 + i * 0.12] for i in range(5)])
+
+    has_ax_model = "coords_ax" in models
+
+    results = []
+    for i, level in enumerate(LEVELS):
+        y = float(sag_coords[i, 1])
+        frame_idx = int(round((1.0 - y) * (N - 1)))
+        frame_idx = max(0, min(N - 1, frame_idx))
+
+        frame = ax_imgs[frame_idx]
+        image_b64 = _frame_to_jpeg(frame)
+
+        if has_ax_model:
+            model_ax, cfg_ax = models["coords_ax"]
+            f = frame.astype(np.float32)
+            pmin, pmax = np.percentile(f, (1, 99))
+            if pmax > pmin:
+                f = np.clip(f, pmin, pmax)
+                f = (f - pmin) / (pmax - pmin)
+            else:
+                f = (f - f.min()) / (f.max() - f.min() + 1e-6)
+
+            resize_h, resize_w = cfg_ax.resize
+            f_resized = cv2.resize(f, (resize_w, resize_h))
+            img_3ch = np.stack([f_resized] * 3, axis=0).astype(np.float32)  # (3, H, W)
+            tensor = torch.from_numpy(img_3ch).unsqueeze(0).to(device)  # (1, 3, H, W)
+
+            with torch.no_grad():
+                y_pred, _ = model_ax(tensor)
+                y_pred = torch.sigmoid(y_pred).cpu().numpy()[0]  # (4,)
+
+            x_left, y_left, x_right, y_right = (float(v) for v in y_pred)
+        else:
+            x_left, y_left = 0.3, 0.5
+            x_right, y_right = 0.7, 0.5
+
+        results.append({
+            "level": level.replace("/", "-"),
+            "image": image_b64,
+            "left": {"x": x_left, "y": y_left},
+            "right": {"x": x_right, "y": y_right},
+        })
+
+    return results
