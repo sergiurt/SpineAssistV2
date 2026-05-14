@@ -29,7 +29,7 @@ image = (
     volumes={"/weights": weights_volume},
     secrets=[modal.Secret.from_name("kaggle-credentials")],
     timeout=300,
-    container_idle_timeout=120,
+    scaledown_window=120,
 )
 class SpineAssistApp:
     @modal.enter()
